@@ -7,6 +7,8 @@ iheight, iwidth = 480, 640 # raw image size
 class NYUDataset(MyDataloader):
     def __init__(self, root, type, sparsifier=None, modality='rgb'):
         super(NYUDataset, self).__init__(root, type, sparsifier, modality)
+        # self.output_size = (480, 640)
+
         self.output_size = (228, 304)
 
     def train_transform(self, rgb, depth):
@@ -32,6 +34,7 @@ class NYUDataset(MyDataloader):
 
     def val_transform(self, rgb, depth):
         depth_np = depth
+        # print(depth_np.shape)
         transform = transforms.Compose([
             transforms.Resize(240.0 / iheight),
             transforms.CenterCrop(self.output_size),

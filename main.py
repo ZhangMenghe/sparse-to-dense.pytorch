@@ -13,7 +13,9 @@ from metrics import AverageMeter, Result
 from dataloaders.dense_to_sparse import UniformSampling, SimulatedStereo
 import criteria
 import utils
-
+import dataloaders.transforms as transforms
+import cv2
+from glob import glob
 args = utils.parse_command()
 print(args)
 
@@ -22,7 +24,7 @@ fieldnames = ['mse', 'rmse', 'absrel', 'lg10', 'mae',
                 'data_time', 'gpu_time']
 best_result = Result()
 best_result.set_to_worst()
-
+to_tensor = transforms.ToTensor()
 def create_data_loaders(args):
     # Data loading code
     print("=> creating data loaders ...")
@@ -34,6 +36,7 @@ def create_data_loaders(args):
     # sparsifier is a class for generating random sparse depth input from the ground truth
     sparsifier = None
     max_depth = args.max_depth if args.max_depth >= 0.0 else np.inf
+    print("max depth "+ str(max_depth))
     if args.sparsifier == UniformSampling.name:
         sparsifier = UniformSampling(num_samples=args.num_samples, max_depth=max_depth)
     elif args.sparsifier == SimulatedStereo.name:
@@ -44,6 +47,7 @@ def create_data_loaders(args):
         if not args.evaluate:
             train_dataset = NYUDataset(traindir, type='train',
                 modality=args.modality, sparsifier=sparsifier)
+        print("===modality " + args.modality)
         val_dataset = NYUDataset(valdir, type='val',
             modality=args.modality, sparsifier=sparsifier)
 
@@ -79,7 +83,26 @@ def main():
 
     # evaluation mode
     start_epoch = 0
-    if args.evaluate:
+    if args.inference:
+        assert os.path.isfile(args.inference), \
+        "=> no best model found at '{}'".format(args.inference)
+        print("=> loading best model '{}'".format(args.inference))
+        checkpoint = torch.load(args.inference)
+        output_directory = os.path.dirname(args.inference)
+        # args = checkpoint['args']
+        model = checkpoint['model']
+        print("=> loaded best model (epoch {})".format(checkpoint['epoch']))
+        # inference(model,"256", "256_dense.png")
+    #         parser.add_argument('--sparsepath', type=str, default='/home/menghe/Github/PEAC/sparse_point/0221/',
+    #                     help='absolute path of sparse depth points')
+    # parser.add_argument('--rgbpath', type=str, default="/home/menghe/Github/mediapipe/frames/0221/",
+    #                     help='absolute path of frames')
+        rgbpath = "/home/menghe/Github/mediapipe/frames/0221/"
+        sparsepath = "/home/menghe/Github/PEAC/sparse_point/0221/"
+        inference(model, args.rgbpath, args.sparsepath)
+        return
+
+    elif args.evaluate:
         assert os.path.isfile(args.evaluate), \
         "=> no best model found at '{}'".format(args.evaluate)
         print("=> loading best model '{}'".format(args.evaluate))
@@ -166,7 +189,7 @@ def main():
                 txtfile.write("epoch={}\nmse={:.3f}\nrmse={:.3f}\nabsrel={:.3f}\nlg10={:.3f}\nmae={:.3f}\ndelta1={:.3f}\nt_gpu={:.4f}\n".
                     format(epoch, result.mse, result.rmse, result.absrel, result.lg10, result.mae, result.delta1, result.gpu_time))
             if img_merge is not None:
-                img_filename = output_directory + '/comparison_best.png'
+                img_filename = output_directory + '/results/comparison_best.png'
                 utils.save_image(img_merge, img_filename)
 
         utils.save_checkpoint({
@@ -225,6 +248,72 @@ def train(train_loader, model, criterion, optimizer, epoch):
             'mae': avg.mae, 'delta1': avg.delta1, 'delta2': avg.delta2, 'delta3': avg.delta3,
             'gpu_time': avg.gpu_time, 'data_time': avg.data_time})
 
+# def inference(model, filename, out_name):
+def inference(model, rgb_path, sparse_path):
+    sparse_files = glob(sparse_path+"*.tiff")
+    # print(sparse_files)
+    postfix = sparse_files[0].split('/')[-2]
+    for sparse in sparse_files:
+        #get frame
+        time_stamp = sparse.split('/')[-1].split('_')[0]
+        filename_rgb = rgb_path + time_stamp + ".png"
+        print(filename_rgb)
+        model.eval()
+        rgb = cv2.imread(filename_rgb)
+        if rgb is None:
+            return
+        # rgb=cv2.flip( rgb, 1 )
+        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
+        depth = cv2.imread(sparse, cv2.IMREAD_UNCHANGED)
+        if depth is None:
+            return
+    
+        #transform
+
+        transform = transforms.Compose([
+            transforms.Resize(240.0 / 480),
+            transforms.CenterCrop((228, 304)),
+        ])
+        rgb_np = transform(rgb)
+        
+        rgb_np = np.asfarray(rgb_np, dtype='float') / 255
+
+        depth_np = transform(depth)
+        # depth_np = np.asfarray(depth_np, dtype='float')
+
+        print(rgb_np.shape)
+        print(depth_np.shape)
+
+        input_np = np.append(rgb_np, np.expand_dims(depth_np, axis=2), axis=2)
+        print(input_np.shape)
+        
+        # input_np = np.transpose(input_np, (1, 2, 0))
+        # print(input_np.shape)
+        input_tensor = to_tensor(input_np)
+        while input_tensor.dim() < 4:
+            input_tensor = input_tensor.unsqueeze(0)
+        input_cuda = input_tensor.cuda()
+        with torch.no_grad():
+            print(input_cuda.size())
+            pred = model(input_cuda)
+        torch.cuda.synchronize()
+        depth_pred_cpu = np.squeeze(pred.data.cpu().numpy())
+        # print(depth_pred_cpu)
+        # print("====")
+        # print(np.max(depth_pred_cpu))
+
+        res = depth_pred_cpu / np.max(depth_pred_cpu) * 255
+        res = cv2.resize(res,(640,480))
+        # res = res.astype(np.uint16)
+        print(np.unique(res))
+
+        cv2.imwrite("res/"+postfix+"/"+time_stamp+"_dense.png", res)
+
+        img_merge = utils.merge_into_row(input_cuda[:,:3,:,:], input_cuda[:,3,:,:], pred)
+        cv2.imwrite("res/"+postfix+"/"+time_stamp+"_comp.png", img_merge)
+
+
+
 
 def validate(val_loader, model, epoch, write_to_file=True):
     average_meter = AverageMeter()
@@ -232,12 +321,21 @@ def validate(val_loader, model, epoch, write_to_file=True):
     end = time.time()
     for i, (input, target) in enumerate(val_loader):
         input, target = input.cuda(), target.cuda()
+        
+        # trgb = input[:,:3,:,:]
+        # tdepth = input[:,3:,:,:]
+        # tdepth_cpu = np.squeeze(tdepth.data.cpu().numpy())
+        # print(np.unique(tdepth_cpu))
+        # print("====")
+        # print(np.max(tdepth_cpu))
+
         torch.cuda.synchronize()
         data_time = time.time() - end
 
         # compute output
         end = time.time()
         with torch.no_grad():
+            print(input.size())
             pred = model(input)
         torch.cuda.synchronize()
         gpu_time = time.time() - end
@@ -247,6 +345,8 @@ def validate(val_loader, model, epoch, write_to_file=True):
         result.evaluate(pred.data, target.data)
         average_meter.update(result, gpu_time, data_time, input.size(0))
         end = time.time()
+
+
 
         # save 8 images for visualization
         skip = 50
@@ -262,27 +362,36 @@ def validate(val_loader, model, epoch, write_to_file=True):
             if i == 0:
                 if args.modality == 'rgbd':
                     img_merge = utils.merge_into_row_with_gt(rgb, depth, target, pred)
+                    print("add row rgbd i=0 " + str(epoch))
+
                 else:
                     img_merge = utils.merge_into_row(rgb, target, pred)
+                    print("add row i=0" + str(epoch))
+
             elif (i < 8*skip) and (i % skip == 0):
                 if args.modality == 'rgbd':
+                    print("add row rgbd" + str(epoch))
                     row = utils.merge_into_row_with_gt(rgb, depth, target, pred)
+
+                    filename = output_directory + '/results/pred_' + str(i) + '.png'
+                    utils.save_image(row,filename)
                 else:
                     row = utils.merge_into_row(rgb, target, pred)
+                    print("add row " + str(epoch))
                 img_merge = utils.add_row(img_merge, row)
             elif i == 8*skip:
-                filename = output_directory + '/comparison_' + str(epoch) + '.png'
+                filename = output_directory + '/results/comparison_' + str(epoch) + '.png'
                 utils.save_image(img_merge, filename)
 
-        if (i+1) % args.print_freq == 0:
-            print('Test: [{0}/{1}]\t'
-                  't_GPU={gpu_time:.3f}({average.gpu_time:.3f})\n\t'
-                  'RMSE={result.rmse:.2f}({average.rmse:.2f}) '
-                  'MAE={result.mae:.2f}({average.mae:.2f}) '
-                  'Delta1={result.delta1:.3f}({average.delta1:.3f}) '
-                  'REL={result.absrel:.3f}({average.absrel:.3f}) '
-                  'Lg10={result.lg10:.3f}({average.lg10:.3f}) '.format(
-                   i+1, len(val_loader), gpu_time=gpu_time, result=result, average=average_meter.average()))
+        # if (i+1) % args.print_freq == 0:
+        #     print('Test: [{0}/{1}]\t'
+        #           't_GPU={gpu_time:.3f}({average.gpu_time:.3f})\n\t'
+        #           'RMSE={result.rmse:.2f}({average.rmse:.2f}) '
+        #           'MAE={result.mae:.2f}({average.mae:.2f}) '
+        #           'Delta1={result.delta1:.3f}({average.delta1:.3f}) '
+        #           'REL={result.absrel:.3f}({average.absrel:.3f}) '
+        #           'Lg10={result.lg10:.3f}({average.lg10:.3f}) '.format(
+        #            i+1, len(val_loader), gpu_time=gpu_time, result=result, average=average_meter.average()))
 
     avg = average_meter.average()
 

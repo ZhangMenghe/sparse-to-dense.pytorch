@@ -108,18 +108,23 @@ class MyDataloader(data.Dataset):
             rgb_np, depth_np = self.transform(rgb, depth)
         else:
             raise(RuntimeError("transform not defined"))
-
+        # print(np.unique(depth_np))
         # color normalization
         # rgb_tensor = normalize_rgb(rgb_tensor)
         # rgb_np = normalize_np(rgb_np)
 
         if self.modality == 'rgb':
             input_np = rgb_np
+            # print("rgb\n")
         elif self.modality == 'rgbd':
             input_np = self.create_rgbd(rgb_np, depth_np)
+            # print("rgbd\n")
+
         elif self.modality == 'd':
             input_np = self.create_sparse_depth(rgb_np, depth_np)
+            # print("depth\n")
 
+        print(input_np.shape)
         input_tensor = to_tensor(input_np)
         while input_tensor.dim() < 3:
             input_tensor = input_tensor.unsqueeze(0)

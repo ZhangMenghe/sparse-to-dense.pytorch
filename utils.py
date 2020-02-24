@@ -54,6 +54,12 @@ def parse_command():
                         help='path to latest checkpoint (default: none)')
     parser.add_argument('-e', '--evaluate', dest='evaluate', type=str, default='',
                         help='evaluate model on validation set')
+    parser.add_argument('-i', '--inference', dest='inference', type=str, default='',
+                        help='inference model')
+    parser.add_argument('--sparsepath', type=str, default='/home/menghe/Github/PEAC/sparse_point/0221/',
+                        help='absolute path of sparse depth points')
+    parser.add_argument('--rgbpath', type=str, default="/home/menghe/Github/mediapipe/frames/0221/",
+                        help='absolute path of frames')                                    
     parser.add_argument('--no-pretrain', dest='pretrained', action='store_false',
                         help='not to use ImageNet pre-trained weights')
     parser.set_defaults(pretrained=True)
