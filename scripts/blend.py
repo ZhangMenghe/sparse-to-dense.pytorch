@@ -21,6 +21,7 @@ def main(src_dir, mask_dir):
 
 
 if __name__ == '__main__':
-    src = "/home/menghe/Github/mediapipe/frame_with_points/0221/"
+    # src = "/home/menghe/Github/mediapipe/frame_with_points/0221/"
+    src = "../../mediapipe/frame_with_points/0221/"
     mask = "../../PEAC/plane_seg/"
     main(src, mask)

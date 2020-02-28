@@ -1,6 +1,5 @@
 # large file
 *.tar
-# res/*
 
 results
 data

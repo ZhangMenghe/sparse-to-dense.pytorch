@@ -334,9 +334,17 @@ class Resize(object):
             PIL Image: Rescaled image.
         """
         if img.ndim == 3:
-            return misc.imresize(img, self.size, self.interpolation)
+            np_arr = np.array(img)
+            mshape = (int(np_arr.shape[0] * self.size), int(np_arr.shape[1]*self.size), np_arr.shape[2])
+            return np.resize(np_arr, mshape)
+            # return Image.fromarray(resized_arr)
+            # return Image.fromarray(np.array(Image.fromarray(img).resize(self.size)))
+            # return misc.imresize(img, self.size, self.interpolation)
         elif img.ndim == 2:
-            return misc.imresize(img, self.size, self.interpolation, 'F')
+            np_arr = np.array(img)
+            mshape = (int(np_arr.shape[0] * self.size), int(np_arr.shape[1]*self.size))
+            return np.resize(np_arr, mshape)
+            # return misc.imresize(img, self.size, self.interpolation, 'F')
         else:
             RuntimeError('img should be ndarray with 2 or 3 dimensions. Got {}'.format(img.ndim))
 

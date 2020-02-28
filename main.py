@@ -15,6 +15,7 @@ import criteria
 import utils
 import dataloaders.transforms as transforms
 import cv2
+import math
 from glob import glob
 args = utils.parse_command()
 print(args)
@@ -87,7 +88,7 @@ def main():
         assert os.path.isfile(args.inference), \
         "=> no best model found at '{}'".format(args.inference)
         print("=> loading best model '{}'".format(args.inference))
-        checkpoint = torch.load(args.inference)
+        checkpoint = torch.load(args.inference, map_location=torch.device('cpu'))
         output_directory = os.path.dirname(args.inference)
         # args = checkpoint['args']
         model = checkpoint['model']
@@ -99,7 +100,7 @@ def main():
     #                     help='absolute path of frames')
         rgbpath = "/home/menghe/Github/mediapipe/frames/0221/"
         sparsepath = "/home/menghe/Github/PEAC/sparse_point/0221/"
-        inference(model, args.rgbpath, args.sparsepath)
+        inference(model, args.rgbpath, args.sparsepath, torch.cuda.is_available())
         return
 
     elif args.evaluate:
@@ -247,40 +248,86 @@ def train(train_loader, model, criterion, optimizer, epoch):
         writer.writerow({'mse': avg.mse, 'rmse': avg.rmse, 'absrel': avg.absrel, 'lg10': avg.lg10,
             'mae': avg.mae, 'delta1': avg.delta1, 'delta2': avg.delta2, 'delta3': avg.delta3,
             'gpu_time': avg.gpu_time, 'data_time': avg.data_time})
+def get_depth(sparse_file, out_size, b_filter = True, b_sample = True):
+    try:
+        sparse_file = open(sparse_file)                                                                                                      
+    except IOError:
+        print("sparse file not exist")
+        return None
+
+    lines = sparse_file.readlines()
+    depth = np.zeros(out_size)
+    cloud = np.zeros((480,640,3))
+
+    if b_sample and len(lines)>300:
+        cs = max(300, int(len(lines) * 0.7))
+        lines = np.random.choice(lines, cs, replace=False)
+    for line in lines: 
+        nums = line.split(' ')
+        vy, vx, vpx, vpy, vpz = float(nums[0]),float(nums[1]),float(nums[2]),float(nums[3]),float(nums[4]) 
+        
+        y01 = (720 - vy) / 240
+        y01 = 1.0 - (y01 * 0.5 +0.5)
+        y = int (y01 * out_size[0])
+        x = int(vx / 640 * out_size[1])
+        depth[y][x] = math.sqrt(vpx**2 + vpy**2 + vpz**2)
+        cloud[int (y01 * 480)][int(vx)] = [vpx, vpy, vpz]
+    if b_filter:
+        vs = np.unique(depth)
+        vs.sort()
+        print(vs)
+        lf = vs[int(len(vs) * 0.1)]
+        hf = vs[int(len(vs) * 0.9)]
+        depth[np.where(np.logical_or((depth < lf), (depth > hf)))] = .0
+        # if(len(lines) > 200):
+    
+    return depth, cloud
 
 # def inference(model, filename, out_name):
-def inference(model, rgb_path, sparse_path):
-    sparse_files = glob(sparse_path+"*.tiff")
+def inference(model, rgb_path, sparse_path, b_gpu):
+    # sparse_files = glob(sparse_path+"*.tiff")
     # print(sparse_files)
+    sparse_files = glob(sparse_path + "*.txt")
+    print(sparse_files)
     postfix = sparse_files[0].split('/')[-2]
     for sparse in sparse_files:
         #get frame
-        time_stamp = sparse.split('/')[-1].split('_')[0]
+        # time_stamp = sparse.split('/')[-1].split('_')[0]
+        time_stamp = sparse.split('/')[-1].split('.')[0]
+        print(time_stamp)
         filename_rgb = rgb_path + time_stamp + ".png"
         print(filename_rgb)
         model.eval()
         rgb = cv2.imread(filename_rgb)
         if rgb is None:
-            return
+            continue
         # rgb=cv2.flip( rgb, 1 )
         rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
-        depth = cv2.imread(sparse, cv2.IMREAD_UNCHANGED)
+        # depth = cv2.imread(sparse, cv2.IMREAD_UNCHANGED)
+        depth, cloud = get_depth(sparse, (228,304))
         if depth is None:
-            return
-    
+            continue
+        np.save("res/"+postfix+"/"+time_stamp+".npz", cloud)
+        
         #transform
 
-        transform = transforms.Compose([
-            transforms.Resize(240.0 / 480),
-            transforms.CenterCrop((228, 304)),
-        ])
-        rgb_np = transform(rgb)
+        # transform = transforms.Compose([
+        #     transforms.Resize(240.0 / 480),
+        #     transforms.CenterCrop((228, 304)),
+        # ])
+        # rgb_np = transform(rgb)
+        rgb_np = cv2.resize(rgb,(304,228))
+
+        # cv2.imwrite("res/"+postfix+"/"+time_stamp+"_test.png", rgb_np)
+
         
         rgb_np = np.asfarray(rgb_np, dtype='float') / 255
 
-        depth_np = transform(depth)
-        # depth_np = np.asfarray(depth_np, dtype='float')
+        # depth_np = transform(depth)
+        # depth_np = cv2.resize(depth,(304,228), interpolation=cv2.INTER_NEAREST)
 
+        # depth_np = np.asfarray(depth_np, dtype='float')
+        depth_np = depth
         print(rgb_np.shape)
         print(depth_np.shape)
 
@@ -292,11 +339,13 @@ def inference(model, rgb_path, sparse_path):
         input_tensor = to_tensor(input_np)
         while input_tensor.dim() < 4:
             input_tensor = input_tensor.unsqueeze(0)
-        input_cuda = input_tensor.cuda()
+        if b_gpu:
+            input_tensor = input_tensor.cuda()
         with torch.no_grad():
-            print(input_cuda.size())
-            pred = model(input_cuda)
-        torch.cuda.synchronize()
+            print(input_tensor.size())
+            pred = model(input_tensor)
+        if b_gpu:    
+            torch.cuda.synchronize()
         depth_pred_cpu = np.squeeze(pred.data.cpu().numpy())
         # print(depth_pred_cpu)
         # print("====")
@@ -309,7 +358,7 @@ def inference(model, rgb_path, sparse_path):
 
         cv2.imwrite("res/"+postfix+"/"+time_stamp+"_dense.png", res)
 
-        img_merge = utils.merge_into_row(input_cuda[:,:3,:,:], input_cuda[:,3,:,:], pred)
+        img_merge = utils.merge_into_row(input_tensor[:,:3,:,:], input_tensor[:,3,:,:], pred)
         cv2.imwrite("res/"+postfix+"/"+time_stamp+"_comp.png", img_merge)
 
 

@@ -2,7 +2,6 @@ import os
 import os.path
 import numpy as np
 import torch.utils.data as data
-import h5py
 import dataloaders.transforms as transforms
 
 IMG_EXTENSIONS = ['.h5',]
@@ -32,6 +31,8 @@ def make_dataset(dir, class_to_idx):
     return images
 
 def h5_loader(path):
+    import h5py
+
     h5f = h5py.File(path, "r")
     rgb = np.array(h5f['rgb'])
     rgb = np.transpose(rgb, (1, 2, 0))
