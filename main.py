@@ -266,12 +266,10 @@ def get_depth(sparse_file, out_size, b_filter = True, b_sample = True):
         nums = line.split(' ')
         vy, vx, vpx, vpy, vpz = float(nums[0]),float(nums[1]),float(nums[2]),float(nums[3]),float(nums[4]) 
         
-        y01 = (720 - vy) / 240
-        y01 = 1.0 - (y01 * 0.5 +0.5)
-        y = int (y01 * out_size[0])
+        y = int (vy / 480* out_size[0])
         x = int(vx / 640 * out_size[1])
         depth[y][x] = math.sqrt(vpx**2 + vpy**2 + vpz**2)
-        cloud[int (y01 * 480)][int(vx)] = [vpx, vpy, vpz]
+        cloud[int (vy)][int(vx)] = [vpx, vpy, vpz]
     if b_filter:
         vs = np.unique(depth)
         vs.sort()
